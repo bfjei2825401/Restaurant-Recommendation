@@ -53,7 +53,7 @@ public interface ReviewMapper {
     })
     public List<ReviewEntity> getReviewsByUserId(String user_id);
 
-    @Select("SELECT id,stars,date,text,useful,funny,cool,business_id,user_id FROM review WHERE business_id=#{restaurantId}")
+    @Select("SELECT id,stars,date,text,useful,funny,cool,business_id,user_id FROM review WHERE business_id=#{restaurantId} LIMIT 0,10")
     @Results({
             @Result(property = "id", column = "id"),
             @Result(property = "stars", column = "stars"),

@@ -1,13 +1,10 @@
 package com.fivetalk.recommendationservice.spark;
 
-import java.io.BufferedReader;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
-import java.io.IOException;
+import java.io.*;
 import java.util.HashMap;
 import java.util.Map;
 
-public class SparkUtil {
+public class SparkUtil implements Serializable {
     private Map<Integer, String> userHashMap;
     private Map<Integer, String> businessHashMap;
 

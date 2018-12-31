@@ -18,16 +18,22 @@ import scala.Tuple2;
 import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 public class SparkALS implements Serializable {
 
     private static final Logger log = LoggerFactory.getLogger(SparkALS.class);
+    private static final String path = "recommendation-service/result/save/";
+    private static SparkUtil sparkUtil = new SparkUtil();
+    private MatrixFactorizationModel model;
 
     public void trainModel() {
         SparkConf conf = new SparkConf()
                 .setAppName("RecommendationALS")
-                .setMaster("local[4]");
+                .setMaster("local[4]").setSparkHome("/Users/baofeng/spark-2.3.2-bin-hadoop2.7/");
+
         JavaSparkContext jsc = new JavaSparkContext(conf);
         JavaRDD<String> data = jsc.textFile("recommendation-service/data/review_triple_index_pure.csv");
         JavaRDD<Rating> ratings = data.map(new Function<String, Rating>() {
@@ -41,80 +47,25 @@ public class SparkALS implements Serializable {
         // Build the recommendation model using ALS
         int rank = 10;
         int numIterations = 6;
-        MatrixFactorizationModel model = ALS.train(JavaRDD.toRDD(ratings), rank, numIterations, 0.01);
-
-        // Evaluate the model on rating data
-        JavaRDD<Tuple2<Object, Object>> userProducts = ratings.map(new Function<Rating, Tuple2<Object, Object>>() {
-            public Tuple2<Object, Object> call(Rating r) {
-                return new Tuple2<Object, Object>(r.user(), r.product());
-            }
-        });
-
-        // 预测的评分
-        JavaPairRDD<Tuple2<Integer, Integer>, Double> predictions = JavaPairRDD
-                .fromJavaRDD(model.predict(JavaRDD.toRDD(userProducts)).toJavaRDD()
-                        .map(new Function<Rating, Tuple2<Tuple2<Integer, Integer>, Double>>() {
-                            public Tuple2<Tuple2<Integer, Integer>, Double> call(Rating r) {
-                                return new Tuple2<Tuple2<Integer, Integer>, Double>(
-                                        new Tuple2<Integer, Integer>(r.user(), r.product()), r.rating());
-                            }
-                        }));
-
-        JavaPairRDD<Tuple2<Integer, Integer>, Tuple2<Double, Double>> ratesAndPreds = JavaPairRDD
-                .fromJavaRDD(ratings.map(new Function<Rating, Tuple2<Tuple2<Integer, Integer>, Double>>() {
-                    public Tuple2<Tuple2<Integer, Integer>, Double> call(Rating r) {
-                        return new Tuple2<Tuple2<Integer, Integer>, Double>(
-                                new Tuple2<Integer, Integer>(r.user(), r.product()), r.rating());
-                    }
-                })).join(predictions);
-
-        // 得到按照用户ID排序后的评分列表 key:用户id
-        JavaPairRDD<Integer, Tuple2<Integer, Double>> fromJavaRDD = JavaPairRDD.fromJavaRDD(ratesAndPreds.map(
-                new Function<Tuple2<Tuple2<Integer, Integer>, Tuple2<Double, Double>>, Tuple2<Integer, Tuple2<Integer, Double>>>() {
-
-                    public Tuple2<Integer, Tuple2<Integer, Double>> call(
-                            Tuple2<Tuple2<Integer, Integer>, Tuple2<Double, Double>> t) throws Exception {
-                        return new Tuple2<Integer, Tuple2<Integer, Double>>(t._1._1,
-                                new Tuple2<Integer, Double>(t._1._2, t._2._2));
-                    }
-                })).sortByKey(false);
-
-//		List<Tuple2<Integer,Tuple2<Integer,Double>>> list = fromJavaRDD.collect();
-//		for(Tuple2<Integer,Tuple2<Integer,Double>> t:list){
-//			System.out.println(t._1+":"+t._2._1+"===="+t._2._2);
-//		}
-
-        JavaRDD<Tuple2<Double, Double>> ratesAndPredsValues = ratesAndPreds.values();
-
-        double MSE = JavaDoubleRDD.fromRDD(ratesAndPredsValues.map(new Function<Tuple2<Double, Double>, Object>() {
-            public Object call(Tuple2<Double, Double> pair) {
-                Double err = pair._1() - pair._2();
-                return err * err;
-            }
-        }).rdd()).mean();
-
-        try {
-            FileUtils.deleteDirectory(new File("recommendation-service/result"));
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        ratesAndPreds.repartition(1).saveAsTextFile("recommendation-service/result/ratesAndPreds");
-
+        this.model = ALS.train(JavaRDD.toRDD(ratings), rank, numIterations, 0.01);
+//        this.model.save(jsc.sc(), path);
         //为指定用户推荐10个商品(电影)
         Rating[] recommendProducts = model.recommendProducts(2, 10);
         log.info("get recommend result:{}", Arrays.toString(recommendProducts));
+    }
 
-        // 为所有用户推荐TOP N个物品
-        //model.recommendUsersForProducts(10);
+    public List<String> getRecommendationByUserId(int userIndex, int topN) {
+        Rating[] recommendProduct = this.model.recommendProducts(userIndex, topN);
+        List<String> businessIdList = new ArrayList<>();
+        for (Rating r : recommendProduct) {
+            String businessId = this.sparkUtil.getBusinessIdByIndex(r.product());
+            businessIdList.add(businessId);
+        }
+        return businessIdList;
+    }
 
-        // 为所有物品推荐TOP N个用户
-        //model.recommendProductsForUsers(10)
-
-        model.userFeatures().saveAsTextFile("recommendation-service/result/userFea");
-        model.productFeatures().saveAsTextFile("recommendation-service/result/productFea");
-        log.info("Mean Squared Error = {}" , MSE);
-
+    public SparkALS() {
+        this.trainModel();
     }
 
     public static void main(String[] args) {
